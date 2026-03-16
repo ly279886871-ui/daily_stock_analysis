@@ -110,55 +110,49 @@ class TushareFetcher(BaseFetcher):
         # 根据 API 初始化结果动态调整优先级
         self.priority = self._determine_priority()
     
-def _init_api(self) -> None:
-    """
-    初始化 Tushare API
-    如果 Token 未配置，此数据源将不可用
-    """
-    config = get_config()
-    
-    if not config.tushare_token:
-        logger.warning("Tushare Token 未配置，此数据源不可用")
-        return
-    
-    try:
-        import tushare as ts
-        import requests
-
-        # ===================== 强制代理 =====================
-        proxy = {
-            "http": "http://tushare.nlink.vip",
-            "https": "http://tushare.nlink.vip"
-        }
-        self.session = requests.Session()
-        self.session.proxies = proxy
-        # ====================================================
-
-        # Set Token
-        ts.set_token(config.tushare_token)
-
-        # Get API instance（绑定代理）
-        self._api = ts.pro_api(session=self.session)
-
-        # Fix: tushare SDK 1.4.x hardcodes api.waditu.com/dataapi which may
-        # be unavailable (503). Monkey-patch the query method to use the
-        # official api.tushare.pro endpoint which posts to root URL.
-        self._patch_api_endpoint(config.tushare_token)
-        logger.info("Tushare API 初始化成功（已走代理）")
+    def _init_api(self) -> None:
+        """
+        初始化 Tushare API
         
-    except Exception as e:
-        logger.error(f"Tushare API 初始化失败: {e}")
-        self._api = None
+        如果 Token 未配置，此数据源将不可用
+        """
+        config = get_config()
+        
+        if not config.tushare_token:
+            logger.warning("Tushare Token 未配置，此数据源不可用")
+            return
+        
+        try:
+            import tushare as ts
+            
+            # Set Token
+            ts.set_token(config.tushare_token)
+            
+            # Get API instance
+            self._api = ts.pro_api()
+            
+            # Fix: tushare SDK 1.4.x hardcodes api.waditu.com/dataapi which may
+            # be unavailable (503). Monkey-patch the query method to use the
+            # official api.tushare.pro endpoint which posts to root URL.
+            self._patch_api_endpoint(config.tushare_token)
+
+            logger.info("Tushare API 初始化成功")
+            
+        except Exception as e:
+            logger.error(f"Tushare API 初始化失败: {e}")
+            self._api = None
 
     def _patch_api_endpoint(self, token: str) -> None:
         """
         Patch tushare SDK to use the official api.tushare.pro endpoint.
+
         The SDK (v1.4.x) hardcodes http://api.waditu.com/dataapi and appends
         /{api_name} to the URL. That endpoint may return 503, causing silent
         empty-DataFrame failures. This method replaces the query method to
         POST directly to http://api.tushare.pro (root URL, no path suffix).
         """
         import types
+
         TUSHARE_API_URL = "http://api.tushare.pro"
         _token = token
         _timeout = getattr(self._api, '_DataApi__timeout', 30)
@@ -170,9 +164,7 @@ def _init_api(self) -> None:
                 'params': kwargs,
                 'fields': fields,
             }
-            # ===================== 用代理 Session 发送请求 =====================
-            res = self.session.post(TUSHARE_API_URL, json=req_params, timeout=_timeout)
-            # ==========================================================
+            res = requests.post(TUSHARE_API_URL, json=req_params, timeout=_timeout)
             if res.status_code != 200:
                 raise Exception(f"Tushare API HTTP {res.status_code}")
             result = _json.loads(res.text)
@@ -184,8 +176,8 @@ def _init_api(self) -> None:
             return pd.DataFrame(items, columns=columns)
 
         self._api.query = types.MethodType(patched_query, self._api)
-        logger.debug(f"Tushare API endpoint patched to {TUSHARE_API_URL}（已走代理）")
-        
+        logger.debug(f"Tushare API endpoint patched to {TUSHARE_API_URL}")
+
     def _determine_priority(self) -> int:
         """
         根据 Token 配置和 API 初始化状态确定优先级
